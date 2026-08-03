@@ -1,5 +1,5 @@
 ---
-name: agent-system-orchestration
+name: subagents
 description: Delegate work through the subagents CLI. Use for background workers, specialized research, long-running tasks, parallel delegation, dependent multi-step work, and scripted TypeScript agent workflows.
 ---
 
