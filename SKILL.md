@@ -71,6 +71,13 @@ Available globals:
 
 `agent` options are `instructions`, `label`, `model`, and `schema`. Sequential `await`, conditions, loops, variables, and returned JSON work as normal TypeScript.
 
+Treat every agent result as an explicit handoff to the next stage:
+
+- Pass short results through variables; use `schema` for structured lists and routing data.
+- For large artifacts, have the agent write a file and return its absolute path plus a short summary.
+- Tell each downstream agent what input it received and what output it must produce; stages do not share conversation context.
+- Give every step a stable, stage-oriented `label` such as `01-discover` or `03-synthesize`.
+
 Run and inspect workflows:
 
 ```bash
@@ -84,6 +91,8 @@ subagents workflow cancel <workflow_run_id>
 ```
 
 The run command returns immediately. Poll `workflow show` for `completed`, `failed`, or `canceled`; the final value is in `output`. Workflow internals do not emit per-step chat notifications.
+
+For per-step status without extra application code, inspect `step_attempts` in `$SUBAGENTS_WORKFLOW_DB` (default `/agent/state/subagents/workflows.db`). The `step_name` includes the step `label`.
 
 Workflow state and completed agent steps are durable in SQLite. The workflow runs from the source snapshot stored at launch, so later edits or deletion of the original file do not alter the active run.
 
