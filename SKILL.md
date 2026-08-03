@@ -1,101 +1,92 @@
 ---
 name: agent-system-orchestration
-description: Use when a task should be delegated to ad-hoc researcher or worker Pi sessions through bash.
+description: Delegate work through the subagents CLI. Use for background workers, specialized research, long-running tasks, parallel delegation, dependent multi-step work, and scripted TypeScript agent workflows.
 ---
 
-# Agent System Orchestration
+# Subagents
 
-Use this skill when a user request is heavy, research-oriented, implementation-oriented, or naturally parallelizable.
+Use `subagents` for delegated agent work. Do not launch ad-hoc `pi` sessions directly.
 
-Researcher and worker are skill-level conventions, not built-in platform roles. Start them as normal Pi sessions from bash. Choose the model and thinking level yourself for the task.
+Choose the smallest suitable mode:
 
-Use `pi --list-models` when you need to inspect available model ids.
+- Use `subagents create` for one independent background task.
+- Use a TypeScript workflow for dependent steps, parallel branches, or reusable scripted pipelines.
 
-Useful Pi flags:
+## Background job
 
-- `--print` / `-p`: run non-interactively and print the final answer.
-- `--model <provider/model:thinking>`: choose the model and thinking level.
-- `--session-dir <dir>`: choose where the raw session is stored.
-- `--append-system-prompt <file>`: attach a role prompt file.
-- `--tools read,bash,edit,write`: keep the usual workstation tool set.
-- `--no-extensions --no-skills`: keep the child session explicit and avoid hidden extension or skill metadata injection.
-
-Store child sessions under `raw/sessions/<thread-key>/researcher` or `raw/sessions/<thread-key>/worker`. Store child outputs as Markdown artifacts in memory, then read those artifacts before replying.
-
-## Researcher
-
-Run a one-shot researcher when a task needs focused discovery, context gathering, source reading, or fact collection.
+Start a worker with a standard profile:
 
 ```bash
-THREAD_ID="<thread-id>"
-THREAD_KEY="$(printf '%s' "$THREAD_ID" | tr -c 'A-Za-z0-9._-' '-')"
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-research"
-SESSION_DIR="$MEMORY_DIR/raw/sessions/$THREAD_KEY/researcher/$RUN_ID"
-ARTIFACT="$MEMORY_DIR/wiki/artifacts/$THREAD_KEY/research-$RUN_ID.md"
-MODEL="openai-codex/gpt-5.4-mini:medium"
-
-mkdir -p "$SESSION_DIR" "$(dirname "$ARTIFACT")"
-
-pi --print \
-  --no-extensions \
-  --no-skills \
-  --tools read,bash,edit,write \
-  --session-dir "$SESSION_DIR" \
-  --model "$MODEL" \
-  --append-system-prompt "$MEMORY_DIR/skills/agent-system-orchestration/researcher.md" \
-  "Research this task and write a compact artifact. Memory workspace: $MEMORY_DIR. Task: ..." \
-  > "$ARTIFACT"
+subagents create \
+  --thread "<current thread id>" \
+  --instructions "$(cat /app/subagents/profiles/worker.md)" \
+  --prompt "Describe the task and required artifact"
 ```
 
-Read the artifact before planning worker execution or replying.
+Use `/app/subagents/profiles/researcher.md` for focused discovery. Add `--model "provider/model:reasoning"` only when the task needs a specific model.
 
-## Worker
-
-Start a persistent worker when a task needs implementation, editing, verification, or iterative follow-up.
+Manage jobs:
 
 ```bash
-THREAD_ID="<thread-id>"
-THREAD_KEY="$(printf '%s' "$THREAD_ID" | tr -c 'A-Za-z0-9._-' '-')"
-WORKER_ID="<stable-worker-id>"
-SESSION_DIR="$MEMORY_DIR/raw/sessions/$THREAD_KEY/worker/$WORKER_ID"
-ARTIFACT="$MEMORY_DIR/wiki/artifacts/$THREAD_KEY/worker-$WORKER_ID.md"
-MODEL="openai-codex/gpt-5.4:high"
-
-mkdir -p "$SESSION_DIR" "$(dirname "$ARTIFACT")"
-
-pi --print \
-  --no-extensions \
-  --no-skills \
-  --tools read,bash,edit,write \
-  --session-dir "$SESSION_DIR" \
-  --model "$MODEL" \
-  --append-system-prompt "$MEMORY_DIR/skills/agent-system-orchestration/worker.md" \
-  "Work on this task and update the artifact. Artifact path: $ARTIFACT. Task: ..." \
-  > "$ARTIFACT"
+subagents list
+subagents show <job_id>
+subagents append <job_id> --prompt "Follow-up instruction"
+subagents cancel <job_id>
 ```
 
-Continue an existing worker:
+After creation, keep the parent responsive. Report the job id and use `show` when status is needed. Normal background jobs notify the parent when they finish.
+
+## TypeScript workflow
+
+Write a workflow file anywhere. Use ordinary TypeScript control flow with Claude-style globals:
+
+```ts
+export const meta = {
+  name: "review-files",
+  description: "Plan and review files",
+};
+
+const plan = await agent<{ files: string[] }>(`Find files for ${args.task}`, {
+  label: "plan",
+  schema: {
+    type: "object",
+    properties: { files: { type: "array", items: { type: "string" } } },
+    required: ["files"],
+  },
+});
+
+const reviews = await pipeline(plan.files, (file) =>
+  agent(`Review ${file}`, { label: file }),
+);
+
+return reviews.join("\n\n");
+```
+
+Available globals:
+
+- `args`: JSON passed by `--args`; defaults to `{}`.
+- `agent(prompt, options)`: run one durable agent step.
+- `pipeline(items, callback)`: run mapped agent branches in parallel.
+- `parallel(...promises)`: await independent branches in parallel.
+
+`agent` options are `instructions`, `label`, `model`, and `schema`. Sequential `await`, conditions, loops, variables, and returned JSON work as normal TypeScript.
+
+Run and inspect workflows:
 
 ```bash
-pi --print \
-  --no-extensions \
-  --no-skills \
-  --tools read,bash,edit,write \
-  --session-dir "$SESSION_DIR" \
-  --model "$MODEL" \
-  --append-system-prompt "$MEMORY_DIR/skills/agent-system-orchestration/worker.md" \
-  "Continue. Artifact path: $ARTIFACT. Message: ..." \
-  > "$ARTIFACT"
+subagents workflow run /absolute/path/workflow.ts \
+  --thread "<current thread id>" \
+  --args '{"task":"..."}'
+
+subagents workflow list
+subagents workflow show <workflow_run_id>
+subagents workflow cancel <workflow_run_id>
 ```
 
-List known workers for the current thread:
+The run command returns immediately. Poll `workflow show` for `completed`, `failed`, or `canceled`; the final value is in `output`. Workflow internals do not emit per-step chat notifications.
 
-```bash
-find "$MEMORY_DIR/raw/sessions/$THREAD_KEY/worker" -mindepth 1 -maxdepth 1 -type d
-```
+Workflow state and completed agent steps are durable in SQLite. The workflow runs from the source snapshot stored at launch, so later edits or deletion of the original file do not alter the active run.
 
-## Parallel Work
+## Generation limit
 
-Use shell background jobs and `wait` when independent researchers or workers can run concurrently.
-
-Read child-agent artifacts before producing the final user-facing reply.
+`SUBAGENTS_DEPTH` is propagated automatically. `SUBAGENTS_MAX_DEPTH` defaults to `4`; generation 4 cannot create another job or workflow. If the CLI reports the depth-limit error, return the work to a parent agent or ask an operator to raise the container limit. Do not retry the same forbidden call.
